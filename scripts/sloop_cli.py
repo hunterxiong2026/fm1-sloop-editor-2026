@@ -1,5 +1,5 @@
 """
-sloop_cli.py — FM-1 / SLOOP 2.3 命令行工具
+sloop_cli.py — FM-1 / SLOOP 2.4.1 命令行工具
 
 用法:
     python sloop_cli.py info
