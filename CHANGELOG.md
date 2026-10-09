@@ -7,11 +7,54 @@
 ## [Unreleased]
 
 ### 计划
-- [ ] 贝斯轨音色听感迭代（更多预设验证）
+- [ ] DIV 枚举扩展到 9 个（1/2、1BAR、2BAR）
+- [ ] KIT 37-41（USR1-4、USR3+4）名称校准
+- [ ] FM6 引擎预设名读取（NAMES [9]）
+- [ ] Parameter locks / Micro timing / Fills 的 SysEx 写入
 - [ ] 多 section 链式编排（A→B→C→D）
-- [ ] 鼓组 lane 力度/ratchet 细粒度 API
-- [ ] `sloop_arrange.py` 支持双 section 一键写入
 - [ ] macOS 支持（CoreMIDI）
+
+---
+
+## [1.1.0] - 2026-10-09
+
+### 新增
+- **适配 SLOOP 2.4.1 固件**
+- **FM6 引擎**（六算子 FM / DX7 兼容）：`ENGINES['FM6'] = 9`，引擎总数 9 → 10
+- **新轨道参数**：
+  - `FILT=50`（每轨滤波器，2.4 新增）
+  - `STRUM=51`（和弦拨弦，-60..60）
+  - `VLEAD=52`（voice leading，0..1）
+  - `KIT=53`（鼓组参数，替代 2.3 的 50）
+  - 引擎编辑参数 54-60（原 51-57 整体后移 3 位）
+- 轨道参数总数 **58 → 61**
+- 鼓组总数 **37 → 42**（新增 USR1-4、USR3+4，名称待校准）
+
+### 修复（2.4.1 实测校准）
+- **`P_KIT` 从 50 迁到 53**：2.3 文档的 `P_E0=50`（当前预设号）在 2.4.1 中已改为 `FILT`，
+  鼓组参数迁到 53。这是本次校准最重要的修正。
+- **winmm 回调签名**：正确的 5 参数
+  `(hMidiIn, wMsg, dwInstance, dwParam1, dwParam2)`。
+- **输入累积切帧**：设备会连续推多帧（如选轨后的 TRACK 通知 + 真正回复），
+  必须按 `F7` 切完整帧。
+- **`request()` 跳过非匹配帧**：避免把推送帧（rc != cmd）当成回复。
+- **`close()` 不调用 `midiInReset`**：有 pending buffer 时会与回调线程死锁。
+- **`send()` 用带 NUL 的 buffer**：与 felucca_link 保持一致。
+- **MIDIHDR 结构体**：`dwUser`/`reserved` 用 `c_ulonglong`（8 字节）。
+- **INFO trailer**：实测 `[4, 9]`（2.3 为 `[4, 6]`）。
+
+### 变更
+- `SKILL.md` version: 1.0.0 → 1.1.0
+- `sloop_link.py` 固件版本注释更新为 2.4.1
+- 直连"四坑"重新整理，新增"其他关键坑"章节
+- 文档全面更新：引擎表、参数表、KIT 表、INFO 解析
+
+### 已知限制
+- 仅支持 Windows
+- 无自动播放命令
+- **DIV 枚举未扩展**：2.4 新增 1/2、1BAR、2BAR（当前脚本仍 6 值）
+- **KIT 37-41**（USR1-4、USR3+4）名称未校验
+- SLOOP 固件为 Beta，有变砖风险
 
 ---
 
@@ -20,48 +63,18 @@
 ### 新增
 - **SLOOP 2.3 直连方案**（ctypes + winmm.dll，协议族同 Felucca）
 - `scripts/sloop_link.py`：直连核心库
-  - 设备枚举（`Felucca` 输入/输出端口）
-  - 帧收发（`F0 7D 46 4C <cmd> <args...> F7`）
-  - v14 编解码、DRUM_STEP 的 g7 编解码
-  - INFO / DESC / NAMES / STEP / TRACK_PARAM / TRACK_MIX / TRACK_DUMP / DRUM_STEP / PROJECT / PRESET
-  - 鼓轨 lane → GM 音映射、37 套鼓组枚举
 - `scripts/sloop_cli.py`：命令行工具（12 个子命令）
-  `info` `desc` `names` `preset` `kit` `readstep` `drumread`
-  `readparam` `setparam` `dump` `save` `restore`
-- `scripts/sloop_arrange.py`：单槽一键编曲（读 JSON → 写 4 轨含鼓轨 → 存 section → 提示 PLAY）
-- `SKILL.md`：入口文档，含完整协议、参数 ID、关键坑
+- `scripts/sloop_arrange.py`：单槽一键编曲
+- `SKILL.md` / `README.md` / `CHANGELOG.md` / `LICENSE`
 - `reference/sloop-sysex-map.md`：参数表、预设名、鼓组枚举、lane 映射
-- `examples/sloop-recipes.md`：编曲配方（含 4 轨验收编曲）
+- `examples/sloop-recipes.md`：编曲配方
 
-### 真机校准（发布前完成）
-- **winmm 回调签名**：正确的 5 参数
-  `(hMidiIn, wMsg, dwInstance, dwParam1, dwParam2)`。
-  4 参数定义会让 `dwParam1` 收到 `dwInstance=NULL`，导致所有 request 收不到回复。
-- **INFO trailer 解析**：SLOOP 的 trailer = `[ntrk, flag]`（实测 `[4, 6]`），
-  无 chainRows/uiCaps 字段。
-- **TRACK_STEP 读步回复**：确认 12B 布局
-  `[i, n, notes4, time, flags, vel, lvl, hi, rat]`，后 3B 解码：
-  ```
-  lvl = b[9] | ((b[10] & 1) << 7)
-  rat = b[11] | (((b[10] >> 1) & 1) << 7)
-  ```
-- **DRUM_STEP 读步回复**：确认 14B 布局 `[i, on3B, lv5B, rt5B]`。
-- **TRACK_DUMP 解析**：头 3B = `[tr, engine, preset]` 单字节，
-  `p` = **58 × (lo, hi) v14 对**，必须 `v14dec(lo, hi)` 解码。
-
-### 与 Felucca 的差异
-- **命令 33** = DRUM_STEP（Felucca 是 SONG）
-- **写步无 chance 字节**：`[tr, i, n, notes4, time, flags, vel]`
-- **9 引擎**（无 DRUM/FM6/NOISE/SLICE），鼓走第 4 轨专用
-- **无自动播放命令**，播放靠设备 PLAY 键
-- **58 轨道参数 + 32 全局参数**（Felucca 是 91 + 27）
-- **DIV 枚举 6 个**（Felucca 8 个）
-
-### 已知限制
-- 仅支持 Windows（依赖 winmm.dll）
-- 无自动播放命令，播放靠设备 PLAY 键
-- 贝斯轨音色听感需实测（REESE=6 已验证，SUB BASS=2 偏轻）
-- SLOOP 固件为 Beta，刷入有变砖风险
+### 与 Felucca 的差异（2.3 时）
+- 命令 33 = DRUM_STEP（Felucca 是 SONG）
+- 写步无 chance 字节
+- 9 引擎（无 DRUM/FM6/NOISE/SLICE），鼓走第 4 轨专用
+- 无自动播放命令
+- 58 轨道参数 + 32 全局参数
 
 ---
 
@@ -72,7 +85,7 @@
 | 变更类型 | 版本号变化 | 示例 |
 |---|---|---|
 | **破坏性变更** | `MAJOR` | 协议不兼容、脚本接口重构 |
-| **新增功能** | `MINOR` | 新脚本、新命令、新配方 |
+| **新增功能** | `MINOR` | 新引擎、新参数、新脚本 |
 | **修复/校准** | `PATCH` | 解析校准、bug fix、文档纠正 |
 
 ### 每次改进的流程

@@ -1,6 +1,7 @@
-# SLOOP 2.3 SysEx 参数映射
+# SLOOP 2.4.1 SysEx 参数映射
 
-> 来源：2026-10-07 实机验证 · 固件 FELUCCA SLOOP 2.3
+> 来源：2026-10-09 实机验证 · 固件 FELUCCA SLOOP 2.4.1
+> （2.3 文档为 9 引擎 / 58 参数，已过时）
 
 ## 帧格式
 ```
@@ -31,43 +32,35 @@ v14dec(lo, hi) = (lo + (hi << 7)) - 8192
 | TRACK_PARAM | 31 | 读 `[tr, id]` / 写 `[tr, id, v14lo, v14hi]` |
 | **DRUM_STEP** | **33** | 鼓轨：读 `[i]` / 写 `[i, on3B, lv5B, rt5B]` |
 
-## INFO 回复结构（实测校准）
+## INFO 回复结构（2.4.1 实测）
 
 ```
 version(\0串) nengines(1B) pcount(1B) gcount(1B) nstep(1B) pe0(1B)
 engines×nengines(\0串) trailer[ntrk(1B), flag(1B)]
 ```
 
-实测：`version='FELUCCA SLOOP 2.3'`, nengines=9, pcount=58, gcount=32,
-nstep=64, pe0=50, **trailer=[4, 6]**。
+**实测**：`version='FELUCCA SLOOP 2.4.1'`, nengines=**10**, pcount=**61**,
+gcount=32, nstep=64, pe0=**53**, **trailer=[4, 9]**。
 
 - `ntrk = trailer[0]` = 4
-- `flag = trailer[1]` = 6（独立 flag 字节，无 chainRows/uiCaps）
+- `flag = trailer[1]` = 9（独立 flag 字节）
 
-## TRACK_STEP 读步回复（12B，实测校准）
+## TRACK_STEP 读步回复（12B）
 
 ```
 请求：TRACK[tr] → STEP_GET[i]
 回复：f0 7d 46 4c 06 <body> f7
 body = [i, n, notes4, time, flags, vel, lvl, hi, rat]
-       b0 b1 b2-b5    b6   b7     b8   b9   b10 b11
 ```
 
-**实测示例**：
-```
-f0 7d 46 4c 06 00 01 3c 00 00 00 00 00 64 00 00 00 f7
-body = [0, 1, 60, 0,0,0, 0, 0, 100, 0, 0, 0]
-       i  n  notes     time flags vel lvl hi rat
-```
-
-**后 3B 解码**：
+后 3B 解码：
 ```
 lvl = b[9] | ((b[10] & 1) << 7)
 rat = b[11] | (((b[10] >> 1) & 1) << 7)
 ```
-写步不带 ext 时 lvl/rat 回 0。TIE 步示例：`body=[1,1,0,0,0,0,1,0,100,0,0,0]`（time=1）。
+实测：合成器轨无 locks 时 lvl/rat 恒为 0。
 
-## DRUM_STEP 读步回复（14B，实测校准）
+## DRUM_STEP 读步回复（14B）
 
 ```
 请求：TRACK[3] → DRUM_STEP[i]
@@ -75,25 +68,15 @@ rat = b[11] | (((b[10] >> 1) & 1) << 7)
 body = [i(1B), on(3B), lv(5B), rt(5B)]
 ```
 
-**实测示例**：
-```
-f0 7d 46 4c 21 00 11 20 00 00 00 00 00 00 00 00 00 00 00 f7
-body = [0, 17, 32, 0,0,0,0,0, 0,0,0,0,0]
-       i  on3B        lv5B       rt5B
-```
-`on = 17 + 32×128 = 4113` = lanes 0(KICK) + 4(CHH) + 12(RIDE)。
-
-## TRACK_DUMP 回复（119B，实测校准）
+## TRACK_DUMP 回复（119B）
 
 ```
 body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
-       b0  b1      b2       b3       b4       b5       b6
 ```
-- 头 3B = `[tr, engine, preset]` **单字节**
-- `p` = **58 × (lo, hi) v14 对**，必须 `v14dec(lo, hi)` 解码
-- 实测：`body = [0, 0, 9, 104,64, 6,64, 70,64, ...]` → `p[0]=v14dec(104,64)=104=LVL`
+- 头 3B = `[tr, engine, preset]` 单字节
+- `p` = **N × (lo, hi) v14 对**，必须 `v14dec(lo, hi)`
 
-## 轨道参数（58 个）
+## 轨道参数（61 个，0-60）
 
 | ID | 名称 | 说明 |
 |---|---|---|
@@ -102,7 +85,7 @@ body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
 | 2 | DEC | Decay |
 | 3 | SUS | Sustain |
 | 4 | REL | Release |
-| 5 | FLT | 滤波器 |
+| 5 | FLT | 滤波器（引擎内） |
 | 6 | PIT | 音高 |
 | 7 | SHP | 形状 |
 | 8 | TRIM | 修剪 |
@@ -121,8 +104,14 @@ body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
 | 47 | RATE | 速率 |
 | 48 | DEPTH | 深度 |
 | 49 | CHORD | 和弦 |
-| 50 | P_E0 | 当前预设号；鼓轨 = KIT |
-| 51-57 | 引擎编辑参数 | ANALOG: DTN MIX NOIS CUT RES DRV KTR |
+| **50** | **FILT** | **每轨滤波器（2.4 新增）** |
+| **51** | **STRUM** | **和弦拨弦（-60..60，2.4 新增）** |
+| **52** | **VLEAD** | **Voice leading（0..1，2.4 新增）** |
+| **53** | **KIT** | **鼓组（0..41，2.4 修正为 53）** |
+| 54-60 | 引擎编辑参数 | ANALOG: DTN MIX NOIS CUT RES DRV KTR |
+
+> **⚠️ 2.4.1 关键修正**：2.3 的 `P_E0=50`（预设号）在 2.4.1 中**已改为 FILT**，
+> 鼓组迁到 **53 (KIT)**。引擎编辑参数从 51-57 后移到 54-60。
 
 ## 全局参数（32 个）
 
@@ -141,12 +130,12 @@ body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
 | 21-23 | SET/CLRSQ/INIT | 设置 |
 | 24-31 | CH/LVL/REV/DUST/DUCK/FILT/ROLL/NEW | 混音与主效果 |
 
-## 引擎（9 个）
+## 引擎（10 个，2.4.1 新增 FM6）
 
 | 值 | 名称 | 说明 |
 |---|---|---|
 | 0 | ANALOG | 虚拟模拟 |
-| 1 | DIGITAL | 数字 FM |
+| 1 | DIGITAL | 4 算子 FM |
 | 2 | PHASE | 相位失真 |
 | 3 | LOFI | 芯片音乐 |
 | 4 | SAMPLE | 采样器 |
@@ -154,8 +143,9 @@ body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
 | 6 | TRIO | 三振荡器 |
 | 7 | WHEEL | 音轮风琴 |
 | 8 | GRAIN | 颗粒 |
+| **9** | **FM6** | **六算子 FM（DX7 兼容，2.4 新增）** |
 
-**注意**：无 DRUM/FM6/NOISE/SLICE；鼓走第 4 轨专用。
+**注意**：无 DRUM/NOISE/SLICE；鼓走第 4 轨专用。
 
 ## 预设名（NAMES 实测，权威）
 
@@ -212,6 +202,13 @@ body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
 0=LOFI CLOUD  1=VIBE HAZE  2=FLUTE DUST
 ```
 
+### FM6 (9) — 2.4 新增，实测 8 个出厂 patch
+```
+0=TINE EP  1=GLASS BELL  2=ROUND BASS  3=BRASS SECT
+4=SOFT PAD  5=WOOD BARS  6=DRAWBARS  7=NYLON PICK
+（B1–B27 为用户 bank，可用 SysEx 导入 DX7 音色）
+```
+
 ## 鼓轨 lane → GM 音
 
 | lane | 名称 | GM |
@@ -233,7 +230,7 @@ body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
 | 14 | CONGA | 63 |
 | 15 | COWBELL | 56 |
 
-## 鼓组 KIT（37 组）
+## 鼓组 KIT（0-41，42 组）
 
 ```
 0=ACOUSTIC  1=DEEP  2=TIGHT  3=BRIGHT  4=DUST
@@ -244,6 +241,7 @@ body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
 25=AMAPIANO  26=AFRO  27=LATIN  28=TRIBAL  29=SYNTHWV
 30=CHIP  31=ARCADE  32=GLITCH  33=INDUSTR  34=HYPER
 35=AMBIENT  36=JAZZ
+37=USR1  38=USR2  39=USR3  40=USR4  41=USR3+4  ← 用户鼓组槽（名称待校准）
 ```
 
 ## 鼓步编码
@@ -263,11 +261,23 @@ g7(x,n) = 每 7bit 一段取低 n 字节
 on = (1<<0)|(1<<2)|(1<<4) = 21
 ```
 
-## DIV/TIME 枚举（SLOOP 只有 6 个）
+## DIV/TIME 枚举
 
+**当前脚本（6 值）**：
 ```
 0=1/4  1=1/8  2=1/16  3=1/32  4=8T  5=16T
 ```
+
+**2.4 新增（待校准值）**：1/2、1BAR、2BAR
+
+## 2.4 新增的步进特性（SysEx 写入待逆向）
+
+- **Parameter locks**：每步可锁 24 个参数，一步可持多个
+- **Micro timing**：每步可偏移 ±半格（1/64 步精度）
+- **Fills**：每步可标记"只在 fill 时播放"或"fill 时静音"
+
+这三个特性挂在步进数据上，当前 12B/14B 布局**可能已扩展**。
+需要重新抓取带 locks 的步进原始帧来逆向。
 
 ## TIE 语义
 
@@ -275,7 +285,7 @@ on = (1<<0)|(1<<2)|(1<<4) = 21
 - 整段全 TIE 无 NOTE 起始 = 静音
 - 写长音 = 首步 `time=0` + 后续步 `time=1`
 
-## 关键坑（实测校准）
+## 关键坑（2.4.1 实测校准）
 
 1. **命令号不要重复带**：`link.request(CMD_TRACK, [0])` 不是 `[27, 0]`
 2. **写步无 chance**：SLOOP 布局 `[tr,i,n,notes,time,flags,vel]`
@@ -283,7 +293,10 @@ on = (1<<0)|(1<<2)|(1<<4) = 21
 4. **无 SONG 命令**：33=DRUM_STEP
 5. **mock 预设表不可信**：以 NAMES 为准
 6. **PRESET = [engine, 引擎内预设号]**：换音色后写步需 0.2s 间隔
-7. **TRACK_DUMP 的 p 是 v14 对**（不是"已解码值"）：`v14dec(p[2i+1], p[2i+2])`
-8. **winmm 回调必须 5 参数**：`(hMidiIn, wMsg, dwInstance, dwParam1, dwParam2)`。
-   4 参数会让 `dwParam1` 收到 `dwInstance=NULL`，所有请求收不到回复。
-9. **INFO trailer = [ntrk, flag]**：4 = ntrk；6 是独立 flag 字节，不是 ntrk。
+7. **TRACK_DUMP 的 p 是 v14 对**：`v14dec(p[2i+1], p[2i+2])`
+8. **winmm 回调必须 5 参数**：`(hMidiIn, wMsg, dwInstance, dwParam1, dwParam2)`
+9. **INFO trailer = [ntrk, flag]**：4 = ntrk；9 是独立 flag
+10. **`P_KIT` = 53**（不是 2.3 文档的 50，50 现在是 FILT）
+11. **`close()` 不调用 `midiInReset`**：会与回调线程死锁
+12. **输入必须累积按 `F7` 切帧**：设备会连推多帧
+13. **`send()` 用带 NUL 的 buffer**

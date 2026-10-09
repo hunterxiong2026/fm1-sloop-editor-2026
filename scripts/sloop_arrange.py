@@ -39,8 +39,7 @@ import time
 from sloop_link import (
     SloopLink, ENGINES, DIVS, TIME_NOTE, TIME_TIE, TIME_REST,
     P_LEN, P_DIV, P_SWG, P_GATE, P_ATK, P_DEC, P_SUS, P_REL, P_FLT,
-    G_BPM, G_SWING,
-    LANE_BY_NAME,
+    G_BPM, G_SWING, LANE_BY_NAME, P_KIT,
 )
 
 PARAM_IDS = {
@@ -106,13 +105,13 @@ def build_drum_track(link, idx, track_data):
     link.select_track(idx)
     time.sleep(0.15)
     params = track_data.get('params', {})
-    # 鼓组 KIT 通过 P_E0(50) 设置
+    # ⚠️ 2.4.1 实测鼓组 KIT 参数 = 53（2.3 文档的 50 已实测为 FILT，勿用）
     if 'KIT' in params:
         kit = params['KIT']
         if isinstance(kit, str):
             from sloop_link import KITS
             kit = KITS.get(kit, 0)
-        link.track_param(idx, 50, kit)
+        link.track_param(idx, P_KIT, kit)
         time.sleep(0.2)
     for key, value in params.items():
         if key in ('LEN', 'DIV'):

@@ -1,9 +1,9 @@
 ---
 name: fm1-sloop-editor
-version: 1.0.0
+version: 1.1.0
 author: hunterxiong2026
 license: MIT
-description: "通过直连 SysEx（ctypes + winmm）操作 M-VAVE FM-1 的 SLOOP 2.3 固件，实现 4 轨编曲、鼓组写入、预设切换与项目槽位管理。播放由设备 PLAY 键触发。"
+description: "通过直连 SysEx（ctypes + winmm）操作 M-VAVE FM-1 的 SLOOP 2.4.1 固件，实现 4 轨编曲、鼓组写入、预设切换与项目槽位管理。播放由设备 PLAY 键触发。"
 keywords:
   - fm1
   - sloop
@@ -14,6 +14,8 @@ keywords:
   - synthesizer
   - groovebox
   - drum-machine
+  - fm6
+  - dx7
 categories:
   - music
   - automation
@@ -30,7 +32,7 @@ requirements:
     optional: false
   - name: sloop-firmware
     type: firmware
-    version: "2.3"
+    version: "2.4.1"
     optional: false
   - name: python
     type: runtime
@@ -46,13 +48,13 @@ platforms:
 # SLOOP Editor Skill
 
 ## 概述
-通过直连 SysEx 协议操控 FM-1 上的 SLOOP 2.3 固件。协议族与 Felucca 相同
+通过直连 SysEx 协议操控 FM-1 上的 SLOOP 2.4.1 固件。协议族与 Felucca 相同
 （帧头 `F0 7D 46 4C ...`），但命令号与写步布局有差异。SLOOP 是 4 轨 Groovebox
 （3 合成器轨 + 1 专用鼓机轨），播放由设备 PLAY 键触发。
 
 ## 何时使用
 - 用户要求写一段编曲（旋律/和弦/贝斯/鼓）
-- 用户要求修改音色参数（滤波器、包络、LFO、琶音等）
+- 用户要求修改音色参数（滤波器、包络、LFO、琶音、滤波器等）
 - 用户要求切换预设或鼓组
 - 用户要求存/读 section A-D
 
@@ -60,7 +62,7 @@ platforms:
 1. **独立 venv**：`scripts/venv/`，绝不装任何包进系统
 2. **FM-1 空闲**：直连前必须关闭浏览器/任何 Web MIDI 会话（设备输入独占）
 3. **设备名**：MIDI 设备名为 `Felucca`（输出 idx=1 / 输入 idx=0）
-4. **固件版本**：FELUCCA SLOOP 2.3（9 引擎 / 64 步 / 4 轨）
+4. **固件版本**：FELUCCA SLOOP 2.4.1（**10 引擎 / 64 步 / 4 轨 / 61 轨道参数**）
 
 ## 脚本清单
 
@@ -103,7 +105,6 @@ v14dec(lo, hi) = (lo + (hi << 7)) - 8192
 | BK_* | 34-36 | v6 备份/恢复（未用） |
 
 **⚠️ 与 Felucca 的关键差异**：SLOOP 命令 33 = DRUM_STEP，**没有 SONG 播放命令**。
-`SONG [0]/[2]` 会被当成 DRUM_STEP 读步（回复看似"状态"实为鼓步数据）。
 
 ### TRACK_STEP 写步布局（合成器轨）
 ```
@@ -116,12 +117,8 @@ v14dec(lo, hi) = (lo + (hi << 7)) - 8192
 - `flags`：1=accent 2=slide
 - `vel`=力度 0-127
 - **无 chance 字节**（Felucca 版多带 4 字节会让 n/notes/time 全错位）
-- **后 3B 解码**（2026-10-07 实测）：
-  ```
-  lvl = b[9] | ((b[10] & 1) << 7)
-  rat = b[11] | (((b[10] >> 1) & 1) << 7)
-  ```
-  写步不带 ext 时 lvl/rat 回 0。
+- **后 3B 解码**：`lvl = b[9] | ((b[10]&1)<<7)`；`rat = b[11] | (((b[10]>>1)&1)<<7)`
+- 实测：合成器轨的 lvl/hi/rat 在无 locks 时恒为 0
 
 ### TIE 语义（关键）
 - `time=1` 延续**最近一个 NOTE 起始步**的音符
@@ -139,14 +136,6 @@ v14dec(lo, hi) = (lo + (hi << 7)) - 8192
 - `rt` = Σ(rat[l]&3) * 4^l（ratchet 1-4 次）
 - `g7(x,n)` = 每 7bit 一段取低 n 字节
 
-**实测读回**：
-```
-f0 7d 46 4c 21 00 11 20 00 00 00 00 00 00 00 00 00 00 00 f7
-body = [0, 17, 32, 0,0,0,0,0, 0,0,0,0,0]
-       i  on3B        lv5B       rt5B
-```
-`on = 17 + 32×128 = 4113` = lanes 0(KICK) + 4(CHH) + 12(RIDE)
-
 ### 鼓轨 lane → GM 音
 ```
 0=KICK(36)   1=KICK2(35)  2=SNARE(38)  3=CLAP(39)
@@ -155,9 +144,9 @@ body = [0, 17, 32, 0,0,0,0,0, 0,0,0,0,0]
 12=RIDE(51)  13=SHAKER(70) 14=CONGA(63)  15=COWBELL(56)
 ```
 
-## 参数 ID
+## 参数 ID（2.4.1 实测 61 个）
 
-### 轨道参数（TRACK_PARAM，58 个）
+### 轨道参数（TRACK_PARAM，0-60）
 ```
 LVL=0  ATK=1  DEC=2  SUS=3  REL=4  FLT=5  PIT=6  SHP=7  TRIM=8
 LFO1: RATE=9 WAVE=10 PHS=11 FADE=12
@@ -169,9 +158,15 @@ DST=33  CHO=34  DLY=35  REV=36
 VCE=37  GLD=38  PAN=39  MUTE=40
 GLMOD=41  PRIO=42  ALLOC=43  DTUNE=44  SLCR=45
 PAT=46(1-16,def=1)  RATE=47  DEPTH=48  CHORD=49
-P_E0=50（当前预设号；鼓轨 = KIT 鼓组号）
-引擎编辑参数 51-57（ANALOG: DTN MIX NOIS CUT RES DRV KTR）
+FILT=50（每轨滤波器）
+STRUM=51（-60..60）
+VLEAD=52（0..1）
+KIT=53（鼓轨 = 鼓组号，0..41）
+引擎编辑参数 54-60（ANALOG: DTN MIX NOIS CUT RES DRV KTR）
 ```
+
+> **⚠️ 2.4.1 关键修正**：2.3 文档的 `P_E0=50`（当前预设号）在 2.4.1 中**已改为 FILT**。
+> 鼓组参数迁到 **id=53 (KIT)**。引擎编辑参数从 51-57 整体后移到 54-60。
 
 ### 全局参数（SET scope=1，32 个）
 ```
@@ -183,25 +178,19 @@ ENG=20（当前轨引擎选择）  SET=21  CLRSQ=22  INIT=23
 CH=24  LVL=25  REV=26  DUST=27  DUCK=28  FILT=29  ROLL=30  NEW=31
 ```
 
-### 枚举
+### 引擎（10 个，2.4.1 新增 FM6）
 ```
-DIV/TIME（SLOOP 只有 6 个）: 0=1/4  1=1/8  2=1/16  3=1/32  4=8T  5=16T
-ENG: ANALOG=0 DIGITAL=1 PHASE=2 LOFI=3 SAMPLE=4
-     VOICE=5 TRIO=6 WHEEL=7 GRAIN=8
-     （无 DRUM/FM6/NOISE/SLICE；鼓走第 4 轨专用）
+ANALOG=0  DIGITAL=1  PHASE=2  LOFI=3  SAMPLE=4
+VOICE=5   TRIO=6     WHEEL=7  GRAIN=8  FM6=9
 ```
+- **FM6**：六算子 FM，DX7 兼容，32 算法，每轨完整 patch
+- 鼓走第 4 轨专用，无 DRUM/NOISE/SLICE 引擎
 
 ### 预设名（NAMES 实测，权威）
-完整表格见 `reference/sloop-sysex-map.md`。注意 **mock 预设表顺序不可信**，
-以 `NAMES [engine]` 读回的为准。例如真实 ANALOG WARM PAD = **13**，不是 mock 里的 9。
+以 `NAMES [engine]` 读回的为准。**mock 预设表顺序不可信**。
+完整表格见 `reference/sloop-sysex-map.md`。
 
-**ANALOG 常用**：
-```
-0=808 BOOM  2=SUB BASS  4=ACID 303  6=REESE  9=G-FUNK LD
-12=SUPERSAW  13=WARM PAD  15=ATMOS PAD
-```
-
-### 鼓组 KIT（37 组，TRACK_PARAM [3, 50, v14(kit)]）
+### 鼓组 KIT（0-41，实测 42 组）
 ```
 0=ACOUSTIC 1=DEEP 2=TIGHT 3=BRIGHT 4=DUST 5=808 6=909 7=606
 8=80S 9=VINTAGE 10=TRAP 11=DRILL 12=BOOMBAP 13=LO-FI 14=PHONK
@@ -209,6 +198,7 @@ ENG: ANALOG=0 DIGITAL=1 PHASE=2 LOFI=3 SAMPLE=4
 21=GARAGE 22=JUNGLE 23=DUBSTEP 24=DEMBOW 25=AMAPIANO 26=AFRO
 27=LATIN 28=TRIBAL 29=SYNTHWV 30=CHIP 31=ARCADE 32=GLITCH
 33=INDUSTR 34=HYPER 35=AMBIENT 36=JAZZ
+37=USR1 38=USR2 39=USR3 40=USR4 41=USR3+4（用户鼓组槽，待校准）
 ```
 
 ## 操控流程
@@ -237,33 +227,37 @@ python sloop_cli.py save <section>             # 存 section
 - **SLOOP 无自动播放命令**。写入并保存后，提示用户**按设备 PLAY 键**。
 - 以实际听声为准。
 
-## INFO 解析要点（实测校准）
+## INFO 解析要点（2.4.1 实测校准）
 
 ```
 version(\0串) nengines(1B) pcount(1B) gcount(1B) nstep(1B) pe0(1B)
 engines×nengines(\0串) trailer[ntrk(1B), flag(1B)]
 ```
-- SLOOP 的 trailer = **`[ntrk, flag]`**，无 chainRows/uiCaps
-- `ntrk = trailer[0]`（实测 = 4）
-- `flag = trailer[1]`（实测 = 6，独立 flag 字节）
-- 实测 trailer：`[4, 6]`
-- 版本串是变长 \0 结尾，不是固定 4 字节
+- **实测**：`version='FELUCCA SLOOP 2.4.1'`, nengines=**10**, pcount=**61**,
+  gcount=32, nstep=64, pe0=**53**, **trailer=[4, 9]**
+- `ntrk = trailer[0]` = 4
+- `flag = trailer[1]` = 9（独立 flag 字节）
 
-## TRACK_DUMP 解析要点（实测校准）
+## TRACK_DUMP 解析要点
 
 ```
 回复 119B：body = [tr, engine, preset, p[0].lo, p[0].hi, p[1].lo, p[1].hi, ...]
 ```
 - 头 3B = `[tr, engine, preset]` **单字节**
-- `p` = **58 × (lo, hi) v14 对**，必须 `v14dec(lo, hi)` 解码
-- 例：`p[0] = v14dec(104, 64) = 104` = LVL
+- `p` = **N × (lo, hi) v14 对**，必须 `v14dec(lo, hi)` 解码
 
 ## 直连四坑（勿重踩）
-1. **MIDIHDR 的 `dwUser`/`reserved` 字段必须是 8 字节指针**（误写 4 字节 → SysEx 发送永不 DONE）
+1. **MIDIHDR 的 `dwUser`/`reserved` 字段必须是 8 字节**（用 `c_ulonglong`）
 2. **`MIM_LONGDATA = 0x3C4`**（误写 0x3C6 → 回复被静默丢弃）
-3. **winmm 所有函数需显式声明 argtypes**（否则 x64 指针截断）
-4. **winmm 回调必须是 5 参数**（`hMidiIn, wMsg, dwInstance, dwParam1, dwParam2`）。
-   4 参数定义会让 `hdr_ptr` 收到 `dwInstance=NULL`，导致所有请求收不到回复。
+3. **winmm 所有函数需显式声明 argtypes**
+4. **winmm 回调必须是 5 参数** `(hMidiIn, wMsg, dwInstance, dwParam1, dwParam2)`。
+   4 参数会让 `dwParam1` 收到 `dwInstance=NULL`，所有请求收不到回复。
+
+## 其他关键坑
+- **close() 不调用 `midiInReset`**：有 pending buffer 时会与回调线程死锁
+- **输入必须累积按 `F7` 切完整帧**：设备会连续推多帧（如选轨后的 TRACK 通知 + 真正回复）
+- **`request()` 必须跳过 rc != cmd 的帧**：否则会把推送帧当成回复
+- **`send()` 用带 NUL 的 buffer**：与 felucca_link 一致
 
 ## 用户硬约束
 1. **独立 venv，绝不装任何包进系统**
@@ -273,11 +267,11 @@ engines×nengines(\0串) trailer[ntrk(1B), flag(1B)]
 
 ## 参考
 - `reference/sloop-sysex-map.md`：参数表、预设名、鼓组枚举、lane 映射
-- `reference/calibration-2026-10-07.md`：原始帧校准记录
-- `examples/sloop-recipes.md`：编曲配方（含 4 轨验收编曲）
+- `examples/sloop-recipes.md`：编曲配方
 
 ## 已知限制
 - 仅支持 Windows（依赖 winmm.dll）
 - **无自动播放命令**，播放靠设备 PLAY 键
-- 贝斯轨音色听感需实测（REESE=6 已验证，SUB BASS=2 偏轻）
+- **DIV 枚举**：2.4 新增 1/2、1BAR、2BAR，当前脚本未扩展（待校准）
+- **KIT 37-41**（USR1-4、USR3+4）名称未校验
 - SLOOP 固件为 Beta，刷入有变砖风险

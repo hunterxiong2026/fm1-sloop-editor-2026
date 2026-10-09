@@ -1,15 +1,16 @@
 """
-sloop_link.py — FM-1 / SLOOP 2.3 直连 SysEx 核心库
+sloop_link.py — FM-1 / SLOOP 直连 SysEx 核心库（已按 2.4.1 实测校准）
 
 零第三方依赖，仅用 ctypes 直调 Windows winmm.dll。
 协议帧：F0 7D 46 4C <cmd & 0x7F> <args...> F7
-固件：FELUCCA SLOOP 2.3（9 引擎 / 64 步 / 4 轨）
+固件：FELUCCA SLOOP 2.4.1（实测：10 引擎 / 64 步 / 4 轨 / 61 轨道参数）
+      （2.3 文档为 9 引擎 / 58 参数，已过时）
 
 ⚠️ 与 Felucca 的关键差异：
   - 命令 33 = DRUM_STEP（Felucca 是 SONG）
   - 写步无 chance 字节
   - 鼓轨用专用 DRUM_STEP 命令
-  - INFO trailer = [ntrk, flag]（4, 6）
+  - INFO trailer = [ntrk, flag]（2.4.1 实测 [4, 9]；4=ntrk，9 为独立 flag）
 """
 
 import ctypes
@@ -41,7 +42,7 @@ CMD_BK = 34
 
 HDR = [0x7D, 0x46, 0x4C]
 
-# ---------- 轨道参数 ID（58 个） ----------
+# ---------- 轨道参数 ID（2.4.1 实测 61 个：0-60） ----------
 P_LVL, P_ATK, P_DEC, P_SUS, P_REL = 0, 1, 2, 3, 4
 P_FLT, P_PIT, P_SHP, P_TRIM = 5, 6, 7, 8
 P_LFO1_RATE, P_LFO1_WAVE, P_LFO1_PHS, P_LFO1_FADE = 9, 10, 11, 12
@@ -54,9 +55,14 @@ P_DST, P_CHO, P_DLY, P_REV = 33, 34, 35, 36
 P_VCE, P_GLD, P_PAN, P_MUTE = 37, 38, 39, 40
 P_GLMOD, P_PRIO, P_ALLOC, P_DTUNE, P_SLCR = 41, 42, 43, 44, 45
 P_PAT, P_RATE, P_DEPTH, P_CHORD = 46, 47, 48, 49
-P_E0 = 50                 # 当前预设号；鼓轨 = KIT 鼓组号
-P_E_DTN, P_E_MIX, P_E_NOIS, P_E_CUT = 51, 52, 53, 54
-P_E_RES, P_E_DRV, P_E_KTR = 55, 56, 57
+# ⚠️ 2.4.1 实测（desc 全量扫描）：50-60 与 2.3 文档完全不同！
+P_FILT   = 50    # 2.4.1 实测 label=FILT（2.3 文档误作"预设号 P_E0"）
+P_STRUM  = 51    # 实测 label=STRUM（-60..60）
+P_VLEAD  = 52    # 实测 label=VLEAD（0..1）
+P_KIT    = 53    # ⚠️ 鼓组参数！实测 label=KIT（0..41，42 组）；鼓轨当前值=5=808
+# 引擎编辑参数（实测 54-60，2.3 文档的 51-57 整体后移 3 位）
+P_E_DTN, P_E_MIX, P_E_NOIS, P_E_CUT = 54, 55, 56, 57
+P_E_RES, P_E_DRV, P_E_KTR = 58, 59, 60
 
 # ---------- 全局参数 ID（32 个） ----------
 G_BPM, G_SWING, G_CLICK, G_TUNE, G_TIME = 0, 1, 2, 3, 4
@@ -68,9 +74,10 @@ G_CH, G_LVL, G_REV, G_DUST, G_DUCK = 24, 25, 26, 27, 28
 G_FILT, G_ROLL, G_NEW = 29, 30, 31
 
 # ---------- 枚举 ----------
+# ⚠️ 2.4.1 实测 10 引擎（含 FM6）；2.3 文档只有 9 个
 ENGINES = {
     'ANALOG': 0, 'DIGITAL': 1, 'PHASE': 2, 'LOFI': 3, 'SAMPLE': 4,
-    'VOICE': 5, 'TRIO': 6, 'WHEEL': 7, 'GRAIN': 8,
+    'VOICE': 5, 'TRIO': 6, 'WHEEL': 7, 'GRAIN': 8, 'FM6': 9,
 }
 ENGINE_NAMES = {v: k for k, v in ENGINES.items()}
 
@@ -99,6 +106,8 @@ DRUM_LANES = {
 }
 LANE_BY_NAME = {name: idx for idx, (name, _) in DRUM_LANES.items()}
 
+# ⚠️ 2.4.1 实测 KIT 参数范围 0..41（42 组），下表为 2.3 文档的 37 组（0-36），
+# 37-41 名称未知，待 NAMES/DESC 补充
 KITS = {
     'ACOUSTIC': 0, 'DEEP': 1, 'TIGHT': 2, 'BRIGHT': 3, 'DUST': 4,
     '808': 5, '909': 6, '606': 7, '80S': 8, 'VINTAGE': 9,
@@ -114,16 +123,18 @@ DRUM_LEVELS = {'NORM': 0, 'GHOST': 1, 'SOFT': 2, 'HARD': 3}
 
 # ---------- winmm 结构体 ----------
 class MIDIHDR(ctypes.Structure):
+    """⚠️ 与 felucca_link.py 逐字段一致（实测这是唯一能稳定收全帧的声明）。
+    lpData 用 c_void_p、dwUser/reserved 用 c_ulonglong，共 88B。"""
     _fields_ = [
-        ("lpData", ctypes.c_char_p),
-        ("dwBufferLength", ctypes.c_uint32),
-        ("dwBytesRecorded", ctypes.c_uint32),
-        ("dwUser", ctypes.c_void_p),       # ⚠️ 必须 8 字节指针
-        ("dwFlags", ctypes.c_uint32),
+        ("lpData", ctypes.c_void_p),
+        ("dwBufferLength", wintypes.DWORD),
+        ("dwBytesRecorded", wintypes.DWORD),
+        ("dwUser", ctypes.c_ulonglong),
+        ("dwFlags", wintypes.DWORD),
         ("lpNext", ctypes.c_void_p),
-        ("reserved", ctypes.c_void_p),     # ⚠️ 必须 8 字节指针
-        ("dwOffset", ctypes.c_uint32),
-        ("dwReserved", ctypes.c_void_p * 8),
+        ("reserved", ctypes.c_ulonglong),
+        ("dwOffset", wintypes.DWORD),
+        ("dwReserved", ctypes.c_void_p * 4),
     ]
 
 class MIDIINCAPS(ctypes.Structure):
@@ -254,6 +265,7 @@ class SloopLink:
         self.h_in = None
         self.h_out = None
         self._rx_queue = []
+        self._rx_acc = bytearray()   # 累积未切帧的输入字节（按 F7 切完整帧）
         self._in_buf = None
         self._in_hdr = None
         self._cb_ref = None
@@ -266,9 +278,9 @@ class SloopLink:
         # ---- 输入 ----
         h = wintypes.HANDLE()
         self._in_buf = ctypes.create_string_buffer(8192)
-        self._in_hdr = MIDIHDR()
-        self._in_hdr.lpData = ctypes.cast(self._in_buf, ctypes.c_char_p)
-        self._in_hdr.dwBufferLength = 8192
+        # ⚠️ 位置式构造，逐字段与 felucca_link.py 一致（实测稳定收全帧的关键）
+        self._in_hdr = MIDIHDR(ctypes.addressof(self._in_buf), 8192, 0, 0, 0, 0, 0, 0,
+                               (ctypes.c_void_p * 4)())
 
         # ⚠️ winmm 回调必须是 5 参数
         # void CALLBACK MidiInProc(HMIDIIN, UINT, DWORD_PTR, DWORD_PTR, DWORD_PTR)
@@ -285,11 +297,21 @@ class SloopLink:
                 hdr = hdr_ptr.contents
                 if hdr.dwBytesRecorded > 0:
                     data = ctypes.string_at(hdr.lpData, hdr.dwBytesRecorded)
-                    self._rx_queue.append(bytes(data))
+                    # ⚠️ 必须累积并按 F7 切完整帧：设备会连续推多帧
+                    # （如选轨后的 TRACK 通知 rc=27 + 真正的回复帧）
+                    self._rx_acc += data
+                    while True:
+                        i = self._rx_acc.find(bytes([0xF7]))
+                        if i < 0:
+                            break
+                        frame = bytes(self._rx_acc[:i + 1])
+                        del self._rx_acc[:i + 1]
+                        self._rx_queue.append(frame)
                 winmm.midiInAddBuffer(self.h_in, hdr_ptr, ctypes.sizeof(MIDIHDR))
         self._cb_ref = CB(_cb)
 
-        rc = winmm.midiInOpen(ctypes.byref(h), in_idx, self._cb_ref, None, CALLBACK_FUNCTION)
+        rc = winmm.midiInOpen(ctypes.byref(h), in_idx,
+                              ctypes.cast(self._cb_ref, ctypes.c_void_p), None, CALLBACK_FUNCTION)
         if rc != 0:
             raise RuntimeError(f'midiInOpen 失败: {rc}')
         self.h_in = h
@@ -307,10 +329,15 @@ class SloopLink:
         return self
 
     def close(self):
+        """⚠️ 不要调用 midiInReset：在有 pending buffer 时会与回调线程死锁（实测必现）。
+        与 felucca_link.py 一致：Stop → UnprepareHeader → Close。"""
         if self.h_in:
             try:
                 winmm.midiInStop(self.h_in)
-                winmm.midiInReset(self.h_in)
+            except Exception:
+                pass
+            try:
+                winmm.midiInUnprepareHeader(self.h_in, ctypes.byref(self._in_hdr), ctypes.sizeof(MIDIHDR))
             except Exception:
                 pass
             winmm.midiInClose(self.h_in)
@@ -320,10 +347,9 @@ class SloopLink:
             self.h_out = None
 
     def send(self, frame: bytes):
-        buf = ctypes.create_string_buffer(frame, len(frame))
-        hdr = MIDIHDR()
-        hdr.lpData = ctypes.cast(buf, ctypes.c_char_p)
-        hdr.dwBufferLength = len(frame)
+        buf = ctypes.create_string_buffer(frame)  # ⚠️ 带 NUL，与 felucca_link 一致
+        hdr = MIDIHDR(ctypes.addressof(buf), len(frame), 0, 0, 0, 0, 0, 0,
+                      (ctypes.c_void_p * 4)())
         winmm.midiOutPrepareHeader(self.h_out, ctypes.byref(hdr), ctypes.sizeof(MIDIHDR))
         winmm.midiOutLongMsg(self.h_out, ctypes.byref(hdr), ctypes.sizeof(MIDIHDR))
         for _ in range(400):
@@ -344,17 +370,28 @@ class SloopLink:
         return None
 
     def request(self, cmd, args, timeout=2.0):
+        """发命令并等 rc==cmd 的完整回复帧。跳过其它推送帧（如选轨后的 TRACK 通知 rc=27）。"""
         self._rx_queue.clear()
         self.send_cmd(cmd, args)
-        return self._poll_rx(timeout)
+        end = time.time() + timeout
+        while time.time() < end:
+            fr = self._poll_rx(max(0.02, min(0.2, end - time.time())))
+            if fr is None:
+                continue
+            if len(fr) < 6 or fr[0] != 0xF0 or fr[-1] != 0xF7 or fr[1:4] != bytes(HDR):
+                continue
+            if fr[4] == (cmd & 0x7F):
+                return fr
+        return None
 
     # ---- 高层 API ----
     def info(self):
-        """解析 INFO 回复。SLOOP 2.3 实测：
-        version='FELUCCA SLOOP 2.3', nengines=9, pcount=58, gcount=32,
-        nstep=64, pe0=50, ntrk=4, trailer=[4, 6]
+        """解析 INFO 回复。SLOOP 2.4.1 实测：
+        version='FELUCCA SLOOP 2.4.1', nengines=10, pcount=61, gcount=32,
+        nstep=64, pe0=53, ntrk=4, trailer=[4, 9]
 
-        trailer = [ntrk, flag]；4 = ntrk；6 是独立 flag 字节。
+        trailer = [ntrk, flag]；trailer[0]=ntrk；trailer[1] 是独立 flag 字节。
+        （2.3 文档的 trailer=[4,6] 中 6 也是 flag，不是 ntrk。）
         """
         r = self.request(CMD_INFO, [])
         if not r or len(r) < 6:
@@ -442,9 +479,11 @@ class SloopLink:
         self.send_cmd(CMD_PRESET, [engine, preset])
 
     def set_kit(self, kit_num):
+        """⚠️ 2.4.1 实测鼓组参数 = id 53 (KIT)，不是文档的 P_E0=50！
+        实测：tr3 id=53 当前值=5(808)；写 36(JAZZ) 读回=36；id=50 是 FILT 与鼓组无关。"""
         self.select_track(3)
         time.sleep(0.1)
-        self.track_param(3, P_E0, kit_num)
+        self.track_param(3, P_KIT, kit_num)
 
     def save_section(self, section):
         self.send_cmd(CMD_PROJECT, [1, section])
@@ -505,9 +544,10 @@ class SloopLink:
         """
         读合成器步。回复 12B：
           body = [i, n, notes4, time, flags, vel, lvl, hi, rat]
-        后 3B 解码：
-          lvl = b[9] | ((b[10] & 1) << 7)
-          rat = b[11] | (((b[10] >> 1) & 1) << 7)
+        ⚠️ 2.4.1 实测（12 组 flags×vel 组合）：合成器轨的 lvl(b[9])/hi(b[10])/rat(b[11])
+        恒为 0，协议写步无入口可产生非零值 → bit7 扩展解码（lvl=b[9]|((b[10]&1)<<7) 等）
+        未经高值样本验证，遇非零样本时按此推断解析，并建议再实测确认。
+        flags 正确落在 b[7]（1=accent 2=slide），vel 在 b[8]。
         """
         self.select_track(track)
         time.sleep(0.08)
