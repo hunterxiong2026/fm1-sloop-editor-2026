@@ -161,3 +161,5 @@ MIT License，详见 [LICENSE](LICENSE)。
 
 SLOOP 固件仍处于 Beta 阶段，刷入与使用存在变砖风险，请自行承担。
 本 Skill 为第三方工具，与 M-VAVE 官方无关。
+
+Related: try FM-1 firmwares in the browser with the free community [FM-1 Emulator](https://fm1-emulator.atst.tools/).
